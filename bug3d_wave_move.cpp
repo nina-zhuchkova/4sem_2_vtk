@@ -31,6 +31,8 @@ protected:
     double wave;
     // расстояние до источника
     double r;
+    // амплитуды скоростей для лап
+    double paw_vy;
     // Скорость
     double vx;
     double vy;
@@ -38,13 +40,13 @@ protected:
 
 public:
     // Конструктор по умолчанию
-    CalcNode() : x(0.0), y(0.0), z(0.0), wave(0.0), r(0.0), vx(0.0), vy(0.0), vz(0.0)
+    CalcNode() : x(0.0), y(0.0), z(0.0), wave(0.0), r(0.0), paw_vy(0.0), vx(0.0), vy(0.0), vz(0.0)
     {
     }
 
     // Конструктор с указанием всех параметров
-    CalcNode(double x, double y, double z, double wave, double r, double vx, double vy, double vz) 
-            : x(x), y(y), z(z), wave(wave), r(r), vx(vx), vy(vy), vz(vz)
+    CalcNode(double x, double y, double z, double wave, double r, double paw_vy, double vx, double vy, double vz) 
+            : x(x), y(y), z(z), wave(wave), r(r), paw_vy(paw_vy), vx(vx), vy(vy), vz(vz)
     {
     }
 
@@ -79,7 +81,9 @@ protected:
 
 public:
     // Конструктор сетки из заданного stl-файла
-    CalcMesh(const std::vector<double>& nodesCoords, const std::vector<std::size_t>& tetrsPoints, double k = 0, double omega = 0, double x0 = 0, double y0 = 0, double z0 = 0) {
+    CalcMesh(const std::vector<double>& nodesCoords, const std::vector<std::size_t>& tetrsPoints, 
+        const std::vector<double>& pawsAreas, double v0 = 0, 
+        double k = 0, double omega = 0, double x0 = 0, double y0 = 0, double z0 = 0) {
 
         // Пройдём по узлам в модели gmsh
         nodes.resize(nodesCoords.size() / 3);
@@ -93,7 +97,19 @@ public:
             double wave;
             if (r < Eps) { wave = 0; }
             else { wave = cos(k * r)/r; }
-            nodes[i] = CalcNode(pointX, pointY, pointZ, wave, r, 0.0, 0.0, 0.0);
+
+            // считаем амплитуды скоростей для лап
+            double paw_vy = 0.0;
+            for (unsigned int i = 0; i < pawsAreas.size() / 7; ++i) {
+                if (pointX >= pawsAreas[7*i] && pointX <= pawsAreas[7*i+1] &&
+                    pointY >= pawsAreas[7*i + 2] && pointY <= pawsAreas[7*i+3] &&
+                    pointZ >= pawsAreas[7*i + 4] && pointZ <= pawsAreas[7*i+5]) {
+                        if (i % 2) { paw_vy = 2e1*(pointZ - pawsAreas[7*i + 6]); } 
+                        else {paw_vy = -2e1*(pointZ - pawsAreas[7*i + 6]); }
+                    }
+            }
+            double vy = paw_vy + v0;
+            nodes[i] = CalcNode(pointX, pointY, pointZ, wave, r, paw_vy, 0.0, vy, 0.0);
         }
 
         // Пройдём по элементам в модели gmsh
@@ -107,13 +123,15 @@ public:
     }
 
     // Метод отвечает за выполнение для всей сетки шага по времени величиной tau
-    void doTimeStep(double tau, double step, double k = 0, double omega = 0) {
+    void doTimeStep(double tau, double step, double v0 = 0, double k = 0, double omega = 0) {
         for(unsigned int i = 0; i < nodes.size(); i++) {
             // передвижение точек
             nodes[i].move(tau);
             // пробег волны
             if (nodes[i].r < Eps) { nodes[i].wave = 0; }
             else { nodes[i].wave = cos(k * nodes[i].r - omega * step * tau)/nodes[i].r; }
+            // изменение скорости лапы
+            nodes[i].vy = v0 + nodes[i].paw_vy * cos(omega * step * tau);
         }
     }
 
@@ -127,6 +145,9 @@ public:
         // Скалярное поле на точках сетки
         auto wave = vtkSmartPointer<vtkDoubleArray>::New();
         wave->SetName("wave");
+
+        auto paw_velocity = vtkSmartPointer<vtkDoubleArray>::New();
+        paw_velocity->SetName("paw_velocity");
 
         // Векторное поле на точках сетки
         auto vel = vtkSmartPointer<vtkDoubleArray>::New();
@@ -144,6 +165,7 @@ public:
 
             // И значение скалярного поля тоже
             wave->InsertNextValue(nodes[i].wave);
+            paw_velocity->InsertNextValue(nodes[i].paw_vy);
         }
 
         // Грузим точки в сетку
@@ -152,6 +174,7 @@ public:
         // Присоединяем векторное и скалярное поля к точкам
         unstructuredGrid->GetPointData()->AddArray(vel);
         unstructuredGrid->GetPointData()->AddArray(wave);
+        unstructuredGrid->GetPointData()->AddArray(paw_velocity);
 
         // А теперь пишем, как наши точки объединены в тетраэдры
         for(unsigned int i = 0; i < elements.size(); i++) {
@@ -164,7 +187,7 @@ public:
         }
 
         // Создаём снапшот в файле с заданным именем
-        string fileName = "../bug3d/bug3d_wave-step-" + std::to_string(snap_number) + ".vtu";
+        string fileName = "../bug3d/bug3d_wave_move-step-" + std::to_string(snap_number) + ".vtu";
         vtkSmartPointer<vtkXMLUnstructuredGridWriter> writer = vtkSmartPointer<vtkXMLUnstructuredGridWriter>::New();
         writer->SetFileName(fileName.c_str());
         writer->SetInputData(unstructuredGrid);
@@ -177,11 +200,22 @@ int main()
     // Шаг по времени
     double tau = 0.01;
     // количество итераций
-    unsigned int stepnum = 400;
+    unsigned int stepnum = 100;
     // пространственная частота
     double k = 2 * M_PI / 25;
     // частота
-    double omega = 1e2 / stepnum / tau;
+    double omega = 2e1 / stepnum / tau;
+
+    // расположение лап [x_min, x_max, y_min, y_max, z_min, z_max, z_attachment]
+    std::vector<double> pawsAreas = {   75., 89., 138., 147., 1., 12., 7.,
+                                        75., 87., 115., 124., 1., 10., 6.,
+                                        76., 86., 94., 106., 3., 13., 6.,
+                                        94., 108., 138., 147., 1., 12., 7.,
+                                        98., 110., 115., 124., 1., 10., 6.,
+                                        97., 107., 94., 106., 3., 13., 6.};
+
+    // скорость жука
+    double v0 = 1e2;
 
     const unsigned int GMSH_TETR_CODE = 4;
 
@@ -232,7 +266,7 @@ int main()
     // И ещё проверим, что в тетраэдрах что-то похожее на правду лежит.
     assert(tetrsNodesTags->size() % 4 == 0);
 
-    CalcMesh mesh(nodesCoord, *tetrsNodesTags, k, omega, x0, y0, z0);
+    CalcMesh mesh(nodesCoord, *tetrsNodesTags, pawsAreas, v0, k, omega, x0, y0, z0);
 
     gmsh::finalize();
 
@@ -241,7 +275,7 @@ int main()
     // Делаем шаги по времени, 
     // на каждом шаге считаем новое состояние и пишем его в VTK
     for(unsigned int step = 1; step < stepnum; step++) {
-        mesh.doTimeStep(tau, step, k, omega);
+        mesh.doTimeStep(tau, step, v0, k, omega);
         mesh.snapshot(step);
     }
     return 0;

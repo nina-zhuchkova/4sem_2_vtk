@@ -8,6 +8,7 @@ add_executable(cubic3d cubic3d.cpp)
 add_executable(tetr3d tetr3d.cpp)
 add_executable(tetr3d_from_msh tetr3d_from_msh.cpp)
 add_executable(bug3d_wave bug3d_wave.cpp)
+add_executable(bug3d_wave_move bug3d_wave_move.cpp)
 
 # пути к библиотекам
 add_library(gmsh SHARED IMPORTED)
@@ -31,3 +32,5 @@ target_link_libraries(tetr3d_from_msh ${VTK_LIBRARIES})
 target_link_libraries(tetr3d_from_msh ${GMSH_LIBRARIES})
 target_link_libraries(bug3d_wave ${VTK_LIBRARIES})
 target_link_libraries(bug3d_wave ${GMSH_LIBRARIES})
+target_link_libraries(bug3d_wave_move ${VTK_LIBRARIES})
+target_link_libraries(bug3d_wave_move ${GMSH_LIBRARIES})
